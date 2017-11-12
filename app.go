@@ -29,6 +29,10 @@ var (
 	store *sessions.CookieStore
 	app   newrelic.Application
 	endpoints = make(map[string]hoge)
+	tr = &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	hclient = &http.Client{}
 )
 
 type hoge struct {
@@ -355,12 +359,9 @@ func PostModify(w http.ResponseWriter, r *http.Request) {
 }
 
 func fetchApi(txn newrelic.Transaction, method, uri string, headers, params map[string]string) map[string]interface{} {
-	client := &http.Client{}
+	client := http.DefaultClient
 	if strings.HasPrefix(uri, "https://") {
-		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
-		client.Transport = tr
+		client = hclient
 	}
 	values := url.Values{}
 	for k, v := range params {
@@ -531,6 +532,8 @@ func main() {
 		endpoints[service] = h
 	}
 	rows.Close()
+
+	hclient.Transport = tr
 
 	r := mux.NewRouter()
 
