@@ -346,7 +346,7 @@ func PostModify(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/modify", http.StatusSeeOther)
 }
 
-func fetchApi(method, uri string, headers, params map[string]string) map[string]interface{} {
+func fetchApi(txn newrelic.Transaction, method, uri string, headers, params map[string]string) map[string]interface{} {
 	client := &http.Client{}
 	if strings.HasPrefix(uri, "https://") {
 		tr := &http.Transport{
@@ -376,7 +376,9 @@ func fetchApi(method, uri string, headers, params map[string]string) map[string]
 	for k, v := range headers {
 		req.Header.Add(k, v)
 	}
+	s := newrelic.StartExternalSegment(txn, req)
 	resp, err := client.Do(req)
+	s.End()
 	checkErr(err)
 
 	defer resp.Body.Close()
@@ -441,7 +443,7 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 		}
 		uri := fmt.Sprintf(*uriTemplate, ks...)
 
-		data = append(data, Data{service, fetchApi(method, uri, headers, params)})
+		data = append(data, Data{service, fetchApi(txn, method, uri, headers, params)})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
