@@ -25,6 +25,7 @@ import (
 	"github.com/go-redis/redis"
 	"io/ioutil"
 	"bytes"
+	"io"
 )
 
 var (
@@ -471,7 +472,13 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 		var d map[string]interface{}
 		dec := json.NewDecoder(bytes.NewBuffer(bs))
 		dec.UseNumber()
-		checkErr(dec.Decode(&d))
+		for {
+			if err := dec.Decode(&d); err == io.EOF {
+				break
+			} else if err != nil {
+				checkErr(err)
+			}
+		}
 
 		data = append(data, Data{service, d})
 	}
