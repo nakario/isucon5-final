@@ -423,9 +423,11 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 	data := make([]Data, 0, len(arg))
 	for service, conf := range arg {
 		confString := fmt.Sprint(*conf)
+		log.Println("Query:", confString)
 		d := make(map[string]interface{})
 		keys, err := rs.HKeys(confString).Result()
 		if err == redis.Nil {
+			log.Println("Cache not hit")
 			h := endpoints[service]
 
 			headers := make(map[string]string)
@@ -459,8 +461,12 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 		} else if err != nil {
 			checkErr(err)
 		} else {
+			log.Println("key len:", len(keys))
+			log.Println("keys:", keys)
 			vals, err := rs.HMGet(confString, keys...).Result()
 			checkErr(err)
+			log.Println("val len:", len(vals))
+			log.Println("vals:", vals)
 			for i := 0; i < len(keys); i++ {
 				d[keys[i]] = vals[i]
 			}
