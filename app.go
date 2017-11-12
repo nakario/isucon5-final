@@ -51,6 +51,16 @@ type Data struct {
 
 var saltChars = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 
+func newPostgresSegment(txn newrelic.Transaction, collection, operation, query string) newrelic.DatastoreSegment {
+	return newrelic.DatastoreSegment{
+		StartTime: txn.StartSegmentNow(),
+		Product: newrelic.DatastorePostgres,
+		Collection: collection,
+		Operation: operation,
+		ParameterizedQuery: query,
+	}
+}
+
 func getSession(w http.ResponseWriter, r *http.Request) *sessions.Session {
 	txn := app.StartTransaction("getSession", w, r)
 	defer txn.End()
@@ -74,9 +84,11 @@ func authenticate(w http.ResponseWriter, r *http.Request, email, passwd string) 
 	txn := app.StartTransaction("authenticate", w, r)
 	defer txn.End()
 	query := `SELECT id, email, grade FROM users WHERE email=$1 AND passhash=digest(salt || $2, 'sha512')`
+	s := newPostgresSegment(txn, "users", "SELECT", query)
 	row := db.QueryRow(query, email, passwd)
 	user := User{}
 	err := row.Scan(&user.ID, &user.Email, &user.Grade)
+	s.End()
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil
@@ -102,9 +114,11 @@ func getCurrentUser(w http.ResponseWriter, r *http.Request) *User {
 	if !ok || userID == nil {
 		return nil
 	}
+	s := newPostgresSegment(txn, "users", "SELECT", `SELECT id,email,grade FROM users WHERE id=$1`)
 	row := db.QueryRow(`SELECT id,email,grade FROM users WHERE id=$1`, userID)
 	user := User{}
 	err := row.Scan(&user.ID, &user.Email, &user.Grade)
+	s.End()
 	if err == sql.ErrNoRows {
 		clearSession(w, r)
 		return nil
@@ -146,6 +160,8 @@ func PostSignUp(w http.ResponseWriter, r *http.Request) {
 	salt := generateSalt()
 	insertUserQuery := `INSERT INTO users (email,salt,passhash,grade) VALUES ($1,$2,digest($3 || $4, 'sha512'),$5) RETURNING id`
 	insertSubscriptionQuery := `INSERT INTO subscriptions (user_id,arg) VALUES ($1,$2)`
+	s1 := newPostgresSegment(txn, "users", "INSERT", `INSERT INTO users (email,salt,passhash,grade) VALUES ($1,$2,digest($3 || $4, 'sha512'),$5) RETURNING id`)
+	s2 := newPostgresSegment(txn, "subscriptions", "INSERT", `INSERT INTO subscriptions (user_id,arg) VALUES ($1,$2)`)
 	tx, err := db.Begin()
 	checkErr(err)
 	row := tx.QueryRow(insertUserQuery, email, salt, salt, passwd, grade)
@@ -153,15 +169,22 @@ func PostSignUp(w http.ResponseWriter, r *http.Request) {
 	var userId int
 	err = row.Scan(&userId)
 	if err != nil {
+		s2.End()
+		s1.End()
 		tx.Rollback()
 		checkErr(err)
 	}
 	_, err = tx.Exec(insertSubscriptionQuery, userId, "{}")
 	if err != nil {
 		tx.Rollback()
+		s2.End()
+		s1.End()
 		checkErr(err)
 	}
-	checkErr(tx.Commit())
+	err = tx.Commit()
+	s2.End()
+	s1.End()
+	checkErr(err)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
@@ -226,9 +249,11 @@ func GetModify(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to login.", http.StatusForbidden)
 		return
 	}
+	s := newPostgresSegment(txn, "subscriptions", "SELECT", `SELECT arg FROM subscriptions WHERE user_id=$1`)
 	row := db.QueryRow(`SELECT arg FROM subscriptions WHERE user_id=$1`, user.ID)
 	var arg string
 	err := row.Scan(&arg)
+	s.End()
 	if err == sql.ErrNoRows {
 		arg = "{}"
 	}
@@ -260,6 +285,8 @@ func PostModify(w http.ResponseWriter, r *http.Request) {
 	selectQuery := `SELECT arg FROM subscriptions WHERE user_id=$1 FOR UPDATE`
 	updateQuery := `UPDATE subscriptions SET arg=$1 WHERE user_id=$2`
 
+	s1 := newPostgresSegment(txn, "subscriptions", "SELECT", selectQuery)
+	s2 := newPostgresSegment(txn, "subscriptions", "UPDATE", updateQuery)
 	tx, err := db.Begin()
 	checkErr(err)
 	row := tx.QueryRow(selectQuery, user.ID)
@@ -268,12 +295,16 @@ func PostModify(w http.ResponseWriter, r *http.Request) {
 	if err == sql.ErrNoRows {
 		jsonStr = "{}"
 	} else if err != nil {
+		s2.End()
+		s1.End()
 		tx.Rollback()
 		checkErr(err)
 	}
 	var arg Arg
 	err = json.Unmarshal([]byte(jsonStr), &arg)
 	if err != nil {
+		s2.End()
+		s1.End()
 		tx.Rollback()
 		checkErr(err)
 	}
@@ -296,13 +327,21 @@ func PostModify(w http.ResponseWriter, r *http.Request) {
 
 	b, err := json.Marshal(arg)
 	if err != nil {
+		s2.End()
+		s1.End()
 		tx.Rollback()
 		checkErr(err)
 	}
 	_, err = tx.Exec(updateQuery, string(b), user.ID)
-	checkErr(err)
+	if err != nil {
+		s2.End()
+		s1.End()
+		checkErr(err)
+	}
 
 	tx.Commit()
+	s2.End()
+	s1.End()
 
 	http.Redirect(w, r, "/modify", http.StatusSeeOther)
 }
@@ -358,20 +397,26 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s := newPostgresSegment(txn, "subscriptions", "SELECT", `SELECT arg FROM subscriptions WHERE user_id=$1`)
 	row := db.QueryRow(`SELECT arg FROM subscriptions WHERE user_id=$1`, user.ID)
 	var argJson string
-	checkErr(row.Scan(&argJson))
+	err := row.Scan(&argJson)
+	s.End()
+	checkErr(err)
 	var arg Arg
 	checkErr(json.Unmarshal([]byte(argJson), &arg))
 
 	data := make([]Data, 0, len(arg))
 	for service, conf := range arg {
+		s := newPostgresSegment(txn, "endpoints", "SELECT", `SELECT meth, token_type, token_key, uri FROM endpoints WHERE service=$1`)
 		row := db.QueryRow(`SELECT meth, token_type, token_key, uri FROM endpoints WHERE service=$1`, service)
 		var method string
 		var tokenType *string
 		var tokenKey *string
 		var uriTemplate *string
-		checkErr(row.Scan(&method, &tokenType, &tokenKey, &uriTemplate))
+		err := row.Scan(&method, &tokenType, &tokenKey, &uriTemplate)
+		s.End()
+		checkErr(err)
 
 		headers := make(map[string]string)
 		params := conf.Params
