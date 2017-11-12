@@ -451,9 +451,13 @@ func fetchApi(txn newrelic.Transaction, method, uri string, headers, params map[
 	bs, err := json.Marshal(api)
 	checkErr(err)
 
+	key := string(bs)
+	log.Println("key:", key)
+
 	var resp string
-	err = fetch.Get(nil, string(bs), groupcache.StringSink(&resp))
+	err = fetch.Get(nil, key, groupcache.StringSink(&resp))
 	checkErr(err)
+	log.Println("resp:", resp)
 
 	var data map[string]interface{}
 	d := json.NewDecoder(strings.NewReader(resp))
