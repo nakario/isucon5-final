@@ -33,6 +33,7 @@ var (
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	hclient = &http.Client{}
+	dataCache = make(map[string]map[string]interface{})
 )
 
 type hoge struct {
@@ -419,32 +420,40 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 
 	data := make([]Data, 0, len(arg))
 	for service, conf := range arg {
-		h := endpoints[service]
+		d, ok := dataCache[fmt.Sprint(*conf)]
+		if !ok {
+			h := endpoints[service]
 
-		headers := make(map[string]string)
-		params := conf.Params
-		if params == nil {
-			params = make(map[string]string)
-		}
+			headers := make(map[string]string)
+			params := conf.Params
+			if params == nil {
+				params = make(map[string]string)
+			}
 
-		if h.tokenType != nil && h.tokenKey != nil {
-			switch *h.tokenType {
-			case "header":
-				headers[*h.tokenKey] = conf.Token
-				break
-			case "param":
-				params[*h.tokenKey] = conf.Token
-				break
+			if h.tokenType != nil && h.tokenKey != nil {
+				switch *h.tokenType {
+				case "header":
+					headers[*h.tokenKey] = conf.Token
+					break
+				case "param":
+					params[*h.tokenKey] = conf.Token
+					break
+				}
+			}
+
+			ks := make([]interface{}, len(conf.Keys))
+			for i, s := range conf.Keys {
+				ks[i] = s
+			}
+			uri := fmt.Sprintf(*h.uriTemplate, ks...)
+
+			d = fetchApi(txn, h.method, uri, headers, params)
+			if service != "tenki" {
+				dataCache[fmt.Sprint(*conf)] = d
 			}
 		}
 
-		ks := make([]interface{}, len(conf.Keys))
-		for i, s := range conf.Keys {
-			ks[i] = s
-		}
-		uri := fmt.Sprintf(*h.uriTemplate, ks...)
-
-		data = append(data, Data{service, fetchApi(txn, h.method, uri, headers, params)})
+		data = append(data, Data{service, d})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
