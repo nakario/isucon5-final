@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"net/http/pprof"
 )
 
 var (
@@ -379,6 +380,19 @@ func GetInitialize(w http.ResponseWriter, r *http.Request) {
 	checkErr(err)
 }
 
+func AttachProfiler(router *mux.Router) {
+	router.HandleFunc("/debug/pprof/", pprof.Index)
+	router.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	router.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	router.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+
+	// Manually add support for paths linked to by index page at /debug/pprof/
+	router.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
+	router.Handle("/debug/pprof/heap", pprof.Handler("heap"))
+	router.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
+	router.Handle("/debug/pprof/block", pprof.Handler("block"))
+}
+
 func main() {
 	host := os.Getenv("ISUCON5_DB_HOST")
 	if host == "" {
@@ -415,6 +429,8 @@ func main() {
 	store = sessions.NewCookieStore([]byte(ssecret))
 
 	r := mux.NewRouter()
+
+	AttachProfiler(r)
 
 	s := r.Path("/signup").Subrouter()
 	s.Methods("GET").HandlerFunc(GetSignUp)
