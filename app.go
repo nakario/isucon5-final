@@ -22,11 +22,13 @@ import (
 	"strconv"
 	"strings"
 	"net/http/pprof"
+	"github.com/newrelic/go-agent"
 )
 
 var (
 	db    *sql.DB
 	store *sessions.CookieStore
+	app   newrelic.Application
 )
 
 type User struct {
@@ -51,6 +53,8 @@ type Data struct {
 var saltChars = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 
 func getSession(w http.ResponseWriter, r *http.Request) *sessions.Session {
+	txn := app.StartTransaction("getSession", w, r)
+	defer txn.End()
 	session, _ := store.Get(r, "isucon5q-go.session")
 	return session
 }
@@ -60,12 +64,16 @@ func getTemplatePath(file string) string {
 }
 
 func render(w http.ResponseWriter, r *http.Request, status int, file string, data interface{}) {
+	txn := app.StartTransaction("render", w, r)
+	defer txn.End()
 	tpl := template.Must(template.New(file).ParseFiles(getTemplatePath(file)))
 	w.WriteHeader(status)
 	checkErr(tpl.Execute(w, data))
 }
 
 func authenticate(w http.ResponseWriter, r *http.Request, email, passwd string) *User {
+	txn := app.StartTransaction("authenticate", w, r)
+	defer txn.End()
 	query := `SELECT id, email, grade FROM users WHERE email=$1 AND passhash=digest(salt || $2, 'sha512')`
 	row := db.QueryRow(query, email, passwd)
 	user := User{}
@@ -83,6 +91,8 @@ func authenticate(w http.ResponseWriter, r *http.Request, email, passwd string) 
 }
 
 func getCurrentUser(w http.ResponseWriter, r *http.Request) *User {
+	txn := app.StartTransaction("getCurrentUser", w, r)
+	defer txn.End()
 	u := context.Get(r, "user")
 	if u != nil {
 		user := u.(User)
@@ -114,17 +124,23 @@ func generateSalt() string {
 }
 
 func clearSession(w http.ResponseWriter, r *http.Request) {
+	txn := app.StartTransaction("clearSession", w, r)
+	defer txn.End()
 	session := getSession(w, r)
 	delete(session.Values, "user_id")
 	session.Save(r, w)
 }
 
 func GetSignUp(w http.ResponseWriter, r *http.Request) {
+	txn := app.StartTransaction("GetSignUp", w, r)
+	defer txn.End()
 	clearSession(w, r)
 	render(w, r, http.StatusOK, "signup.html", nil)
 }
 
 func PostSignUp(w http.ResponseWriter, r *http.Request) {
+	txn := app.StartTransaction("PostSignUp", w, r)
+	defer txn.End()
 	email := r.FormValue("email")
 	passwd := r.FormValue("password")
 	grade := r.FormValue("grade")
@@ -151,15 +167,21 @@ func PostSignUp(w http.ResponseWriter, r *http.Request) {
 }
 
 func PostCancel(w http.ResponseWriter, r *http.Request) {
+	txn := app.StartTransaction("PostCancel", w, r)
+	defer txn.End()
 	http.Redirect(w, r, "/signup", http.StatusSeeOther)
 }
 
 func GetLogin(w http.ResponseWriter, r *http.Request) {
+	txn := app.StartTransaction("GetLogin", w, r)
+	defer txn.End()
 	clearSession(w, r)
 	render(w, r, http.StatusOK, "login.html", nil)
 }
 
 func PostLogin(w http.ResponseWriter, r *http.Request) {
+	txn := app.StartTransaction("PostLogin", w, r)
+	defer txn.End()
 	email := r.FormValue("email")
 	passwd := r.FormValue("password")
 	authenticate(w, r, email, passwd)
@@ -171,11 +193,15 @@ func PostLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetLogout(w http.ResponseWriter, r *http.Request) {
+	txn := app.StartTransaction("GetLogout", w, r)
+	defer txn.End()
 	clearSession(w, r)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 func GetIndex(w http.ResponseWriter, r *http.Request) {
+	txn := app.StartTransaction("GetIndex", w, r)
+	defer txn.End()
 	if getCurrentUser(w, r) == nil {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
@@ -184,6 +210,8 @@ func GetIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetUserJs(w http.ResponseWriter, r *http.Request) {
+	txn := app.StartTransaction("GetUserJs", w, r)
+	defer txn.End()
 	if getCurrentUser(w, r) == nil {
 		http.Error(w, "Failed to login.", http.StatusForbidden)
 		return
@@ -192,6 +220,8 @@ func GetUserJs(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetModify(w http.ResponseWriter, r *http.Request) {
+	txn := app.StartTransaction("GetModify", w, r)
+	defer txn.End()
 	user := getCurrentUser(w, r)
 	if user == nil {
 		http.Error(w, "Failed to login.", http.StatusForbidden)
@@ -210,6 +240,8 @@ func GetModify(w http.ResponseWriter, r *http.Request) {
 }
 
 func PostModify(w http.ResponseWriter, r *http.Request) {
+	txn := app.StartTransaction("PostModify", w, r)
+	defer txn.End()
 	user := getCurrentUser(w, r)
 	if user == nil {
 		http.Error(w, "Failed to login.", http.StatusForbidden)
@@ -319,6 +351,8 @@ func fetchApi(method, uri string, headers, params map[string]string) map[string]
 }
 
 func GetData(w http.ResponseWriter, r *http.Request) {
+	txn := app.StartTransaction("GetData", w, r)
+	defer txn.End()
 	user := getCurrentUser(w, r)
 	if user == nil {
 		w.WriteHeader(http.StatusForbidden)
@@ -373,6 +407,8 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetInitialize(w http.ResponseWriter, r *http.Request) {
+	txn := app.StartTransaction("GetInitialize", w, r)
+	defer txn.End()
 	fname := "../sql/initialize.sql"
 	file, err := filepath.Abs(fname)
 	checkErr(err)
@@ -427,6 +463,12 @@ func main() {
 	defer db.Close()
 
 	store = sessions.NewCookieStore([]byte(ssecret))
+
+	cfg := newrelic.NewConfig("AirISU", os.Getenv("NEW_RELIC_KEY"))
+	app, err = newrelic.NewApplication(cfg)
+	if err != nil {
+		log.Fatalln("Failed to connect to New Relic:", err)
+	}
 
 	r := mux.NewRouter()
 
