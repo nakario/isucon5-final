@@ -22,6 +22,7 @@ import (
 	"strings"
 	"net/http/pprof"
 	"github.com/newrelic/go-agent"
+	"github.com/go-redis/redis"
 )
 
 var (
@@ -34,6 +35,7 @@ var (
 	}
 	hclient = &http.Client{}
 	dataCache = make(map[string]map[string]interface{})
+	rs *redis.Client
 )
 
 type hoge struct {
@@ -420,8 +422,10 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 
 	data := make([]Data, 0, len(arg))
 	for service, conf := range arg {
-		d, ok := dataCache[fmt.Sprint(*conf)]
-		if !ok {
+		confString := fmt.Sprint(*conf)
+		d := make(map[string]interface{})
+		keys, err := rs.HKeys(confString).Result()
+		if err == redis.Nil {
 			h := endpoints[service]
 
 			headers := make(map[string]string)
@@ -449,7 +453,16 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 
 			d = fetchApi(txn, h.method, uri, headers, params)
 			if service != "tenki" {
-				dataCache[fmt.Sprint(*conf)] = d
+				err := rs.HMSet(confString, d).Err()
+				checkErr(err)
+			}
+		} else if err != nil {
+			checkErr(err)
+		} else {
+			vals, err := rs.HMGet(confString, keys...).Result()
+			checkErr(err)
+			for i := 0; i < len(keys); i++ {
+				d[keys[i]] = vals[i]
 			}
 		}
 
@@ -525,6 +538,17 @@ func main() {
 	app, err = newrelic.NewApplication(cfg)
 	if err != nil {
 		log.Fatalln("Failed to connect to New Relic:", err)
+	}
+
+	rs = redis.NewClient(&redis.Options{
+		Addr:     "webapp1:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	_, err = rs.Ping().Result()
+	if err != nil {
+		log.Fatalln("Failed to connect to redis:", err)
 	}
 
 	rows, err := db.Query(`SELECT * from endpoints`)
