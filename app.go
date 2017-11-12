@@ -702,6 +702,6 @@ func main() {
 
 func checkErr(err error) {
 	if err != nil {
-		log.Fatalln(err)
+		panic(err)
 	}
 }
