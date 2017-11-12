@@ -22,7 +22,13 @@ import (
 	"strings"
 	"net/http/pprof"
 	"github.com/newrelic/go-agent"
+	"github.com/golang/groupcache"
+	"io/ioutil"
+	"sort"
+	"github.com/hashicorp/memberlist"
 )
+
+const GroupcachePort = 8000
 
 var (
 	db    *sql.DB
@@ -33,6 +39,7 @@ var (
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	hclient = &http.Client{}
+	fetch *groupcache.Group
 )
 
 type hoge struct {
@@ -40,6 +47,15 @@ type hoge struct {
 	tokenType *string
 	tokenKey *string
 	uriTemplate *string
+}
+
+type API struct {
+	Method       string            `json:"method"`
+	Uri          string            `json:"uri"`
+	HeaderKeys   []string          `json:"header_keys"`
+	HeaderValues []string          `json:"header_values"`
+	ParamsKeys   []string          `json:"params_keys"`
+	ParamsValues []string          `json:"params_values"`
 }
 
 type User struct {
@@ -358,42 +374,89 @@ func PostModify(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/modify", http.StatusSeeOther)
 }
 
-func fetchApi(txn newrelic.Transaction, method, uri string, headers, params map[string]string) map[string]interface{} {
+func fetchApiTask(ctx groupcache.Context, key string, dst groupcache.Sink) error {
+	d := json.NewDecoder(strings.NewReader(key))
+	var api API
+	d.Decode(&api)
+
 	client := http.DefaultClient
-	if strings.HasPrefix(uri, "https://") {
+	if strings.HasPrefix(api.Uri, "https://") {
 		client = hclient
 	}
 	values := url.Values{}
-	for k, v := range params {
-		values.Add(k, v)
+	for i := 0; i < len(api.HeaderKeys); i++ {
+		values.Add(api.HeaderKeys[i], api.HeaderValues[i])
 	}
 
 	var req *http.Request
 	var err error
-	switch method {
+	switch api.Method {
 	case "GET":
-		req, err = http.NewRequest(method, uri, nil)
+		req, err = http.NewRequest(api.Method, api.Uri, nil)
 		checkErr(err)
 		req.URL.RawQuery = values.Encode()
 		break
 	case "POST":
-		req, err = http.NewRequest(method, uri, strings.NewReader(values.Encode()))
+		req, err = http.NewRequest(api.Method, api.Uri, strings.NewReader(values.Encode()))
 		checkErr(err)
 		break
 	}
 
-	for k, v := range headers {
-		req.Header.Add(k, v)
+	for i := 0; i < len(api.HeaderKeys); i++ {
+		req.Header.Add(api.HeaderKeys[i], api.HeaderValues[i])
 	}
-	s := newrelic.StartExternalSegment(txn, req)
 	resp, err := client.Do(req)
-	s.End()
 	checkErr(err)
 
 	defer resp.Body.Close()
 
+	bs, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		checkErr(err)
+	}
+	dst.SetBytes(bs)
+
+	return nil
+}
+
+func fetchApi(txn newrelic.Transaction, method, uri string, headers, params map[string]string) map[string]interface{} {
+	headerKeys := make([]string, 0, len(headers))
+	for k, _ := range headers {
+		headerKeys = append(headerKeys, k)
+	}
+	sort.Strings(headerKeys)
+	headerValues := make([]string, 0, len(headers))
+	for _, k := range headerKeys {
+		headerValues = append(headerValues, headers[k])
+	}
+
+	paramsKeys := make([]string, 0, len(params))
+	for k, _ := range params {
+		paramsKeys = append(paramsKeys, k)
+	}
+	sort.Strings(paramsKeys)
+	paramsValues := make([]string, 0, len(params))
+	for _, k := range paramsKeys {
+		paramsValues = append(paramsValues, params[k])
+	}
+
+	api := API{
+		Method: method,
+		Uri: uri,
+		HeaderKeys: headerKeys,
+		HeaderValues: headerValues,
+		ParamsKeys: paramsKeys,
+		ParamsValues: paramsValues,
+	}
+	bs, err := json.Marshal(api)
+	checkErr(err)
+
+	var resp string
+	err = fetch.Get(nil, string(bs), groupcache.StringSink(&resp))
+	checkErr(err)
+
 	var data map[string]interface{}
-	d := json.NewDecoder(resp.Body)
+	d := json.NewDecoder(strings.NewReader(resp))
 	d.UseNumber()
 	checkErr(d.Decode(&data))
 	return data
@@ -461,6 +524,72 @@ func GetInitialize(w http.ResponseWriter, r *http.Request) {
 	checkErr(err)
 	_, err = exec.Command("psql", "-f", file, "isucon5f").Output()
 	checkErr(err)
+}
+
+type eventDelegate struct {
+	peers []string
+	pool  *groupcache.HTTPPool
+}
+
+func (e *eventDelegate) NotifyJoin(node *memberlist.Node) {
+	uri := e.groupcacheURI(node.Addr.String())
+	e.removePeer(uri)
+	e.peers = append(e.peers, uri)
+	if e.pool != nil {
+		e.pool.Set(e.peers...)
+	}
+	log.Print("Add peer: " + uri)
+	log.Printf("Current peers: %v", e.peers)
+}
+
+func (e *eventDelegate) NotifyLeave(node *memberlist.Node) {
+	uri := e.groupcacheURI(node.Addr.String())
+	e.removePeer(uri)
+	e.pool.Set(e.peers...)
+	log.Print("Remove peer: " + uri)
+	log.Printf("Current peers: %v", e.peers)
+}
+
+func (e *eventDelegate) NotifyUpdate(node *memberlist.Node) {
+	log.Print("Update the node: %+v\n", node)
+}
+
+func (e *eventDelegate) groupcacheURI(addr string) string {
+	return fmt.Sprintf("http://%s:%d", addr, GroupcachePort)
+}
+
+func (e *eventDelegate) removePeer(uri string) {
+	for i := 0; i < len(e.peers); i++ {
+		if e.peers[i] == uri {
+			e.peers = append(e.peers[:i], e.peers[i+1:]...)
+			i--
+		}
+	}
+}
+
+func initGroupCache() {
+	eventHandler := &eventDelegate{}
+	conf := memberlist.DefaultLANConfig()
+	conf.Events = eventHandler
+	if addr := os.Getenv("GROUPCACHE_ADDR"); addr != "" {
+		conf.AdvertiseAddr = addr
+	}
+
+	list, err := memberlist.Create(conf)
+	if err != nil {
+		panic("Failed to created memberlist: " + err.Error())
+	}
+
+	self := list.Members()[0]
+	addr := fmt.Sprintf("%s:%d", self.Addr, GroupcachePort)
+	eventHandler.pool = groupcache.NewHTTPPool("http://" + addr)
+	go http.ListenAndServe(addr, eventHandler.pool)
+
+	if nodes := os.Getenv("JOIN_TO"); nodes != "" {
+		if _, err := list.Join(strings.Split(nodes, ",")); err != nil {
+			panic("Failed to join cluster: " + err.Error())
+		}
+	}
 }
 
 func AttachProfiler(router *mux.Router) {
@@ -534,6 +663,9 @@ func main() {
 	rows.Close()
 
 	hclient.Transport = tr
+
+	initGroupCache()
+	fetch = groupcache.NewGroup("fetch", 64<<20, groupcache.GetterFunc(fetchApiTask))
 
 	r := mux.NewRouter()
 
