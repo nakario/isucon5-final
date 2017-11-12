@@ -24,7 +24,6 @@ import (
 	"github.com/newrelic/go-agent"
 	"github.com/go-redis/redis"
 	"io/ioutil"
-	"bytes"
 	"io"
 )
 
@@ -425,8 +424,8 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 	for service, conf := range arg {
 		confString := fmt.Sprint(*conf)
 		log.Println("Query:", confString)
-		bs, err := rs.Get(confString).Bytes()
-		if err == redis.Nil {
+		ss := rs.Get(confString).String()
+		if len(ss) == 0 {
 			log.Println("Cache not hit")
 			h := endpoints[service]
 
@@ -461,16 +460,14 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 				err := rs.Set(confString, string(bs), 0).Err()
 				checkErr(err)
 			}
-		} else if err != nil {
-			checkErr(err)
 		} else {
 			log.Println("Cache hit")
-			log.Println("bs len:", len(bs))
-			log.Println("bs:", string(bs))
+			log.Println("ss len:", len(ss))
+			log.Println("ss:", ss)
 		}
 
 		var d map[string]interface{}
-		dec := json.NewDecoder(bytes.NewBuffer(bs))
+		dec := json.NewDecoder(strings.NewReader(ss))
 		dec.UseNumber()
 		for {
 			if err := dec.Decode(&d); err == io.EOF {
