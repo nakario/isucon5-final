@@ -414,7 +414,7 @@ func fetchApiTask(ctx groupcache.Context, key string, dst groupcache.Sink) error
 	if err != nil {
 		checkErr(err)
 	}
-	dst.SetString(string(bs))
+	dst.SetBytes(bs)
 
 	return nil
 }
