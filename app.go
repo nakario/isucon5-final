@@ -28,7 +28,15 @@ var (
 	db    *sql.DB
 	store *sessions.CookieStore
 	app   newrelic.Application
+	endpoints = make(map[string]hoge)
 )
+
+type hoge struct {
+	method string
+	tokenType *string
+	tokenKey *string
+	uriTemplate *string
+}
 
 type User struct {
 	ID    int
@@ -410,15 +418,7 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 
 	data := make([]Data, 0, len(arg))
 	for service, conf := range arg {
-		s := newPostgresSegment(txn, "endpoints", "SELECT", `SELECT meth, token_type, token_key, uri FROM endpoints WHERE service=$1`)
-		row := db.QueryRow(`SELECT meth, token_type, token_key, uri FROM endpoints WHERE service=$1`, service)
-		var method string
-		var tokenType *string
-		var tokenKey *string
-		var uriTemplate *string
-		err := row.Scan(&method, &tokenType, &tokenKey, &uriTemplate)
-		s.End()
-		checkErr(err)
+		h := endpoints[service]
 
 		headers := make(map[string]string)
 		params := conf.Params
@@ -426,13 +426,13 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 			params = make(map[string]string)
 		}
 
-		if tokenType != nil && tokenKey != nil {
-			switch *tokenType {
+		if h.tokenType != nil && h.tokenKey != nil {
+			switch *h.tokenType {
 			case "header":
-				headers[*tokenKey] = conf.Token
+				headers[*h.tokenKey] = conf.Token
 				break
 			case "param":
-				params[*tokenKey] = conf.Token
+				params[*h.tokenKey] = conf.Token
 				break
 			}
 		}
@@ -441,9 +441,9 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 		for i, s := range conf.Keys {
 			ks[i] = s
 		}
-		uri := fmt.Sprintf(*uriTemplate, ks...)
+		uri := fmt.Sprintf(*h.uriTemplate, ks...)
 
-		data = append(data, Data{service, fetchApi(txn, method, uri, headers, params)})
+		data = append(data, Data{service, fetchApi(txn, h.method, uri, headers, params)})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -516,6 +516,21 @@ func main() {
 	if err != nil {
 		log.Fatalln("Failed to connect to New Relic:", err)
 	}
+
+	rows, err := db.Query(`SELECT * from endpoints`)
+	if err != nil {
+		log.Fatalln("Failed to read endpoints")
+	}
+	for rows.Next() {
+		var service string
+		var h hoge
+		err := rows.Scan(&service, &h.method, &h.tokenType, &h.tokenKey, &h.uriTemplate)
+		if err != nil {
+			log.Fatalln("Failed to scan:", err)
+		}
+		endpoints[service] = h
+	}
+	rows.Close()
 
 	r := mux.NewRouter()
 
