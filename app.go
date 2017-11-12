@@ -22,6 +22,7 @@ import (
 	"strings"
 	"net/http/pprof"
 	"github.com/newrelic/go-agent"
+	"github.com/go-redis/redis"
 )
 
 var (
@@ -489,7 +490,7 @@ func main() {
 	log.Println("=======================STARTED========================")
 	host := os.Getenv("ISUCON5_DB_HOST")
 	if host == "" {
-		host = "localhost"
+		host = "webapp2"
 	}
 	portstr := os.Getenv("ISUCON5_DB_PORT")
 	if portstr == "" {
