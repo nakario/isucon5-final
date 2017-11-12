@@ -18,7 +18,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"net/http/pprof"
@@ -253,7 +252,7 @@ func PostModify(w http.ResponseWriter, r *http.Request) {
 	keysStr := r.FormValue("keys")
 	keys := []string{}
 	if keysStr != "" {
-		keys = regexp.MustCompile("\\s+").Split(keysStr, -1)
+		keys = strings.Fields(keysStr)
 	}
 	paramName := r.FormValue("param_name")
 	paramValue := r.FormValue("param_value")
