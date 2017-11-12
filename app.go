@@ -476,6 +476,7 @@ func AttachProfiler(router *mux.Router) {
 }
 
 func main() {
+	log.Println("=======================STARTED========================")
 	host := os.Getenv("ISUCON5_DB_HOST")
 	if host == "" {
 		host = "localhost"
@@ -544,6 +545,8 @@ func main() {
 
 	r.HandleFunc("/", GetIndex)
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir("../static")))
+
+	log.Println("start listen and serve")
 	log.Fatal(http.ListenAndServe(":8080", r))
 }
 
