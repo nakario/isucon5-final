@@ -23,6 +23,8 @@ import (
 	"net/http/pprof"
 	"github.com/newrelic/go-agent"
 	"github.com/go-redis/redis"
+	"io/ioutil"
+	"bytes"
 )
 
 var (
@@ -360,7 +362,7 @@ func PostModify(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/modify", http.StatusSeeOther)
 }
 
-func fetchApi(txn newrelic.Transaction, method, uri string, headers, params map[string]string) map[string]interface{} {
+func fetchApi(txn newrelic.Transaction, method, uri string, headers, params map[string]string) []byte {
 	client := http.DefaultClient
 	if strings.HasPrefix(uri, "https://") {
 		client = hclient
@@ -394,11 +396,10 @@ func fetchApi(txn newrelic.Transaction, method, uri string, headers, params map[
 
 	defer resp.Body.Close()
 
-	var data map[string]interface{}
-	d := json.NewDecoder(resp.Body)
-	d.UseNumber()
-	checkErr(d.Decode(&data))
-	return data
+	bs, err := ioutil.ReadAll(resp.Body)
+	checkErr(err)
+
+	return bs
 }
 
 func GetData(w http.ResponseWriter, r *http.Request) {
@@ -423,9 +424,8 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 	for service, conf := range arg {
 		confString := fmt.Sprint(*conf)
 		log.Println("Query:", confString)
-		d := make(map[string]interface{})
-		keys, err := rs.HKeys(confString).Result()
-		if err == redis.Nil || len(keys) == 0 {
+		bs, err := rs.Get(confString).Bytes()
+		if err == redis.Nil {
 			log.Println("Cache not hit")
 			h := endpoints[service]
 
@@ -452,26 +452,26 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 			}
 			uri := fmt.Sprintf(*h.uriTemplate, ks...)
 
-			d = fetchApi(txn, h.method, uri, headers, params)
+			bs := fetchApi(txn, h.method, uri, headers, params)
 			if service != "tenki" {
-				log.Println("d len:", len(d))
-				log.Println("d:", d)
-				err := rs.HMSet(confString, d).Err()
+				log.Println("Set Cache")
+				log.Println("bs len:", len(bs))
+				log.Println("bs:", string(bs))
+				err := rs.Set(confString, string(bs), 0).Err()
 				checkErr(err)
 			}
 		} else if err != nil {
 			checkErr(err)
 		} else {
-			log.Println("key len:", len(keys))
-			log.Println("keys:", keys)
-			vals, err := rs.HMGet(confString, keys...).Result()
-			checkErr(err)
-			log.Println("val len:", len(vals))
-			log.Println("vals:", vals)
-			for i := 0; i < len(keys); i++ {
-				d[keys[i]] = vals[i]
-			}
+			log.Println("Cache hit")
+			log.Println("bs len:", len(bs))
+			log.Println("bs:", string(bs))
 		}
+
+		var d map[string]interface{}
+		dec := json.NewDecoder(bytes.NewBuffer(bs))
+		dec.UseNumber()
+		checkErr(dec.Decode(&d))
 
 		data = append(data, Data{service, d})
 	}
