@@ -425,7 +425,7 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 		log.Println("Query:", confString)
 		d := make(map[string]interface{})
 		keys, err := rs.HKeys(confString).Result()
-		if err == redis.Nil {
+		if err == redis.Nil || len(keys) == 0 {
 			log.Println("Cache not hit")
 			h := endpoints[service]
 
