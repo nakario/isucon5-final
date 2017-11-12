@@ -702,7 +702,6 @@ func main() {
 
 func checkErr(err error) {
 	if err != nil {
-		log.Println(err)
-		panic(err)
+		log.Fatalln(err)
 	}
 }
