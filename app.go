@@ -22,7 +22,6 @@ import (
 	"strings"
 	"net/http/pprof"
 	"github.com/newrelic/go-agent"
-	"github.com/go-redis/redis"
 )
 
 var (
