@@ -34,7 +34,6 @@ var (
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	hclient = &http.Client{}
-	dataCache = make(map[string]map[string]interface{})
 	rs *redis.Client
 )
 
@@ -455,6 +454,8 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 
 			d = fetchApi(txn, h.method, uri, headers, params)
 			if service != "tenki" {
+				log.Println("d len:", len(d))
+				log.Println("d:", d)
 				err := rs.HMSet(confString, d).Err()
 				checkErr(err)
 			}
