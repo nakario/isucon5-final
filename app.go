@@ -453,11 +453,12 @@ func GetData(w http.ResponseWriter, r *http.Request) {
 			uri := fmt.Sprintf(*h.uriTemplate, ks...)
 
 			bs := fetchApi(txn, h.method, uri, headers, params)
+			ss = string(bs)
 			if service != "tenki" {
 				log.Println("Set Cache")
-				log.Println("bs len:", len(bs))
-				log.Println("bs:", string(bs))
-				err := rs.Set(confString, string(bs), 0).Err()
+				log.Println("ss len:", len(ss))
+				log.Println("ss:", ss)
+				err := rs.Set(confString, ss, 0).Err()
 				checkErr(err)
 			}
 		} else {
